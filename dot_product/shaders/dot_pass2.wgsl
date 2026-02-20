@@ -3,15 +3,10 @@ struct Params {
 }
 
 @group(0) @binding(0)
-var<storage, read_write> data: array<u32>;
+var<storage, read_write> input: array<u32>;
 
 @group(0) @binding(1)
-var<storage, read_write> result: u32;
-
-@group(0) @binding(2)
-var<uniform> params: Params;
-
-
+var<storage, read_write> output: array<u32>;
 
 var<workgroup> g_shared: array<u32, 64>;
 
@@ -19,15 +14,13 @@ var<workgroup> g_shared: array<u32, 64>;
 fn main(
     @builtin(local_invocation_id) local_id: vec3<u32>,
     @builtin(global_invocation_id) global_id: vec3<u32>,
+	@builtin(workgroup_id) workgroup_id: vec3<u32>
 ) {
     let tid = local_id.x;
-    let gid = global_id.x;
+    let index = global_id.x;
 
-    if (gid < params.len) {
-        g_shared[tid] = data[gid];
-    } else {
-        g_shared[tid] = 0u;
-    }
+
+	g_shared[tid] = input[index];
 
     workgroupBarrier();
 
@@ -47,6 +40,6 @@ fn main(
     }
 
     if (tid == 0u) {
-        result = g_shared[0];
+        output[workgroup_id.x] = g_shared[0];
     }
 }

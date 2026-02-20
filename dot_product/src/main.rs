@@ -2,81 +2,125 @@ use flume::bounded;
 use rand::RngExt;
 use wgpu::util::DeviceExt;
 
+const WORKGROUP_SIZE: u32 = 64;
+const SIZE: u32 = 1000000;
+
 fn create_random_vec(size: u32) -> Vec<u32> {
-    let mut dest = Vec::with_capacity(size as usize);
     let mut rng = rand::rng();
+    let mut v = Vec::with_capacity(size as usize);
 
     for _ in 0..size {
-        let rng_value = rng.random_range(0..size);
-        dest.push(rng_value);
+        v.push(rng.random_range(0..3));
     }
-    return dest;
+
+    return v;
 }
 
-// #[repr(C)]
-// #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-// struct Params {
-//     len: u32,
-// }
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct Params {
+    len: u32,
+}
 
-// impl Params {
-//     fn init(len: u32) -> Self {
-//         Self { len }
-//     }
-// }
+struct ReductionPass {
+    bind_group: wgpu::BindGroup,
+    dispatch_count: u32,
+}
 
-async fn dot_product_gpu(first_vec: &Vec<u32>, second_vec: &Vec<u32>) -> anyhow::Result<u32> {
-    assert_eq!(first_vec.len(), second_vec.len());
+fn create_reduction_passes(
+    device: &wgpu::Device,
+    pipeline: &wgpu::ComputePipeline,
+    mut current_len: u32,
+    mut input_buffer: wgpu::Buffer,
+) -> (Vec<ReductionPass>, wgpu::Buffer) {
+    let mut passes = Vec::new();
+
+    while current_len > 1 {
+        let dispatch_count = current_len.div_ceil(WORKGROUP_SIZE);
+
+        let output_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Reduction Output"),
+            size: dispatch_count as u64 * 4,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Reduction BindGroup"),
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: input_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: output_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        passes.push(ReductionPass {
+            bind_group,
+            dispatch_count,
+        });
+
+        input_buffer = output_buffer;
+        current_len = dispatch_count;
+    }
+
+    return (passes, input_buffer);
+}
+
+async fn dot_product_gpu(a: &Vec<u32>, b: &Vec<u32>) -> anyhow::Result<u32> {
+    assert_eq!(a.len(), b.len());
+
+    // ========================
+    // GPU INIT
+    // ========================
 
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
         backends: wgpu::Backends::PRIMARY,
         ..Default::default()
     });
+
     let adapter = instance.request_adapter(&Default::default()).await.unwrap();
     let (device, queue) = adapter.request_device(&Default::default()).await.unwrap();
 
     // ========================
-    // PARAMS
+    // BUFFERS
     // ========================
-    #[repr(C)]
-    #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-    struct Params {
-        len: u32,
-    }
 
     let params = Params {
-        len: first_vec.len() as u32,
+        len: a.len() as u32,
     };
 
     let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Params buffer"),
+        label: Some("Params"),
         contents: bytemuck::bytes_of(&params),
         usage: wgpu::BufferUsages::UNIFORM,
     });
 
-    // ========================
-    // INPUT BUFFERS
-    // ========================
     let a_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("A buffer"),
-        contents: bytemuck::cast_slice(first_vec),
+        label: Some("A"),
+        contents: bytemuck::cast_slice(a),
         usage: wgpu::BufferUsages::STORAGE,
     });
 
     let b_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("B buffer"),
-        contents: bytemuck::cast_slice(second_vec),
+        label: Some("B"),
+        contents: bytemuck::cast_slice(b),
         usage: wgpu::BufferUsages::STORAGE,
     });
 
     // ========================
-    // PASS 1
+    // PASS 1 (multiply + local reduce)
     // ========================
-    let workgroup_size = 64u32;
-    let nb_workgroups = (first_vec.len() as u32).div_ceil(workgroup_size);
+
+    let nb_workgroups = (a.len() as u32).div_ceil(WORKGROUP_SIZE);
 
     let partial_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("Partial buffer"),
+        label: Some("Partial Buffer"),
         size: nb_workgroups as u64 * 4,
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
         mapped_at_creation: false,
@@ -85,7 +129,7 @@ async fn dot_product_gpu(first_vec: &Vec<u32>, second_vec: &Vec<u32>) -> anyhow:
     let shader1 = device.create_shader_module(wgpu::include_wgsl!("../shaders/dot_pass1.wgsl"));
 
     let pipeline1 = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some("Dot pass 1"),
+        label: Some("Dot Pass 1"),
         layout: None,
         module: &shader1,
         entry_point: None,
@@ -117,27 +161,13 @@ async fn dot_product_gpu(first_vec: &Vec<u32>, second_vec: &Vec<u32>) -> anyhow:
     });
 
     // ========================
-    // PASS 2
+    // PASS N (reduction)
     // ========================
-    let final_params = Params { len: nb_workgroups };
-
-    let final_params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Final params"),
-        contents: bytemuck::bytes_of(&final_params),
-        usage: wgpu::BufferUsages::UNIFORM,
-    });
-
-    let result_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("Result buffer"),
-        size: 4,
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-        mapped_at_creation: false,
-    });
 
     let shader2 = device.create_shader_module(wgpu::include_wgsl!("../shaders/dot_pass2.wgsl"));
 
-    let pipeline2 = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some("Dot pass 2"),
+    let reduction_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("Reduction Pipeline"),
         layout: None,
         module: &shader2,
         entry_point: None,
@@ -145,30 +175,16 @@ async fn dot_product_gpu(first_vec: &Vec<u32>, second_vec: &Vec<u32>) -> anyhow:
         cache: Default::default(),
     });
 
-    let bind_group2 = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: None,
-        layout: &pipeline2.get_bind_group_layout(0),
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: partial_buffer.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: result_buffer.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 2,
-                resource: final_params_buffer.as_entire_binding(),
-            },
-        ],
-    });
+    let (reduction_passes, final_buffer) =
+        create_reduction_passes(&device, &reduction_pipeline, nb_workgroups, partial_buffer);
 
     // ========================
     // ENCODER
     // ========================
+
     let mut encoder = device.create_command_encoder(&Default::default());
 
+    // Pass 1
     {
         let mut pass = encoder.begin_compute_pass(&Default::default());
         pass.set_pipeline(&pipeline1);
@@ -176,12 +192,17 @@ async fn dot_product_gpu(first_vec: &Vec<u32>, second_vec: &Vec<u32>) -> anyhow:
         pass.dispatch_workgroups(nb_workgroups, 1, 1);
     }
 
-    {
+    // Reduction passes
+    for rp in reduction_passes {
         let mut pass = encoder.begin_compute_pass(&Default::default());
-        pass.set_pipeline(&pipeline2);
-        pass.set_bind_group(0, &bind_group2, &[]);
-        pass.dispatch_workgroups(1, 1, 1); // 1 workgroup suffit
+        pass.set_pipeline(&reduction_pipeline);
+        pass.set_bind_group(0, &rp.bind_group, &[]);
+        pass.dispatch_workgroups(rp.dispatch_count, 1, 1);
     }
+
+    // ========================
+    // READBACK
+    // ========================
 
     let readback = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("Readback"),
@@ -190,69 +211,46 @@ async fn dot_product_gpu(first_vec: &Vec<u32>, second_vec: &Vec<u32>) -> anyhow:
         mapped_at_creation: false,
     });
 
-    encoder.copy_buffer_to_buffer(&result_buffer, 0, &readback, 0, 4);
+    encoder.copy_buffer_to_buffer(&final_buffer, 0, &readback, 0, 4);
 
     queue.submit(Some(encoder.finish()));
 
-    let result: u32;
-
+	let result;
     {
-        // The mapping process is async, so we'll need to create a channel to get
-        // the success flag for our mapping
         let (tx, rx) = bounded(1);
 
-        // We send the success or failure of our mapping via a callback
-        readback.map_async(wgpu::MapMode::Read, .., move |result| {
-            tx.send(result).unwrap()
+        readback.map_async(wgpu::MapMode::Read, .., move |r| {
+            tx.send(r).unwrap();
         });
 
-        // The callback we submitted to map async will only get called after the
-        // device is polled or the queue submitted
         device.poll(wgpu::PollType::wait_indefinitely())?;
-
-        // We check if the mapping was successful here
         rx.recv()??;
 
-        // We then get the bytes that were stored in the buffer
-        let output_data = readback.get_mapped_range(..);
-
-        result = bytemuck::cast_slice(&output_data).to_vec()[0];
+        let data = readback.get_mapped_range(..);
+        result = bytemuck::cast_slice::<u8, u32>(&data)[0];
     }
 
-    // We need to unmap the buffer to be able to use it again
     readback.unmap();
 
-    Ok(result)
+    return Ok(result);
 }
 
-const SIZE: u32 = 100;
-
 fn main() {
-    let first_vec = create_random_vec(SIZE);
-    let second_vec = create_random_vec(SIZE);
+    let a = create_random_vec(SIZE);
+    let b = create_random_vec(SIZE);
 
     env_logger::init();
 
-    // Appel GPU
-    let gpu_result = pollster::block_on(dot_product_gpu(&first_vec, &second_vec));
+    let gpu_result = pollster::block_on(dot_product_gpu(&a, &b)).unwrap();
 
-    if let Ok(gpu_value) = gpu_result {
-        // Calcul CPU
-        let cpu_value: u32 = first_vec
-            .iter()
-            .zip(second_vec.iter())
-            .map(|(a, b)| a * b)
-            .sum();
+    let cpu_result: u32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
 
-        println!("CPU result: {}", cpu_value);
-        println!("GPU result: {}", gpu_value);
+    println!("CPU result: {}", cpu_result);
+    println!("GPU result: {}", gpu_result);
 
-        if cpu_value == gpu_value {
-            println!("✅ GPU dot product is correct!");
-        } else {
-            println!("❌ Mismatch detected!");
-        }
+    if cpu_result == gpu_result {
+        println!("✅ GPU dot product is correct!");
     } else {
-        println!("❌ GPU computation failed.");
+        println!("❌ Mismatch detected!");
     }
 }
