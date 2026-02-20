@@ -5,6 +5,13 @@
 // This storage buffer can be read from and written to
 @group(0) @binding(2) var<storage, read_write> output: array<u32>;
 
+struct Params {
+    length : u32
+}
+
+@group(0) @binding(3)
+var<uniform> params: Params;
+
 // Tells wgpu that this function is a valid compute pipeline entry_point
 @compute
 // Specifies the "dimension" of this work group
@@ -14,7 +21,7 @@ fn main(
     @builtin(global_invocation_id) global_invocation_id: vec3<u32>
 ) {
     let index = global_invocation_id.x;
-    let total = arrayLength(&first_input);
+    let total = params.length;
 
     // workgroup_size may not be a multiple of the array size so
     // we need to exit out a thread that would index out of bounds.

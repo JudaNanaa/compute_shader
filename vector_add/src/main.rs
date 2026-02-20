@@ -13,6 +13,18 @@ fn create_random_vec(size: u32) -> Vec<u32> {
     return dest;
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct Params {
+    len: u32,
+}
+
+impl Params {
+    fn init(len: u32) -> Self {
+        Self { len }
+    }
+}
+
 async fn add_two_vec(first_vec: &Vec<u32>, second_vec: &Vec<u32>) -> anyhow::Result<Vec<u32>> {
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
         backends: wgpu::Backends::PRIMARY,
@@ -32,6 +44,14 @@ async fn add_two_vec(first_vec: &Vec<u32>, second_vec: &Vec<u32>) -> anyhow::Res
         entry_point: None,
         compilation_options: Default::default(),
         cache: Default::default(),
+    });
+
+	let params = Params::init(first_vec.len() as u32);
+
+    let len_uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Camera Buffer"),
+        contents: bytemuck::cast_slice(&[params]),
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
     });
 
     let first_input_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -76,6 +96,10 @@ async fn add_two_vec(first_vec: &Vec<u32>, second_vec: &Vec<u32>) -> anyhow::Res
                 binding: 2,
                 resource: output_buffer.as_entire_binding(),
             },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: len_uniform.as_entire_binding(),
+            },
         ],
     });
 
@@ -96,7 +120,7 @@ async fn add_two_vec(first_vec: &Vec<u32>, second_vec: &Vec<u32>) -> anyhow::Res
 
     queue.submit([encoder.finish()]);
 
-    let mut sum_vec: Option<Vec<u32>> = None;
+    let sum_vec: Vec<u32>;
 
     {
         // The mapping process is async, so we'll need to create a channel to get
@@ -118,7 +142,7 @@ async fn add_two_vec(first_vec: &Vec<u32>, second_vec: &Vec<u32>) -> anyhow::Res
         // We then get the bytes that were stored in the buffer
         let output_data = temp_buffer.get_mapped_range(..);
 
-        sum_vec = Some(bytemuck::cast_slice(&output_data).to_vec());
+        sum_vec = bytemuck::cast_slice(&output_data).to_vec();
     }
 
     // We need to unmap the buffer to be able to use it again
@@ -126,7 +150,7 @@ async fn add_two_vec(first_vec: &Vec<u32>, second_vec: &Vec<u32>) -> anyhow::Res
 
     println!("Success!");
 
-    return Ok(sum_vec.unwrap());
+    return Ok(sum_vec);
 }
 
 const SIZE: u32 = 1000000;
