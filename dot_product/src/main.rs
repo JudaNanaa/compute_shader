@@ -235,22 +235,109 @@ async fn dot_product_gpu(a: &Vec<u32>, b: &Vec<u32>) -> anyhow::Result<u32> {
     return Ok(result);
 }
 
+use std::time::Instant;
+
+const ITERATIONS: usize = 200;
+
+fn measure_cpu(a: &Vec<u32>, b: &Vec<u32>) -> (u32, f64) {
+    let start = Instant::now();
+
+    let result: u32 = a
+        .iter()
+        .zip(b.iter())
+        .map(|(x, y)| x * y)
+        .sum();
+
+    let duration = start.elapsed().as_secs_f64();
+
+    return (result, duration);
+}
+
+async fn measure_gpu(a: &Vec<u32>, b: &Vec<u32>) -> (u32, f64) {
+    let start = Instant::now();
+
+    let result = dot_product_gpu(a, b).await.unwrap();
+
+    let duration = start.elapsed().as_secs_f64();
+
+    return (result, duration);
+}
+
+fn mean(values: &Vec<f64>) -> f64 {
+    return values.iter().sum::<f64>() / values.len() as f64;
+}
+
+fn std_dev(values: &Vec<f64>, mean: f64) -> f64 {
+    let variance = values
+        .iter()
+        .map(|v| (v - mean).powi(2))
+        .sum::<f64>()
+        / values.len() as f64;
+
+    return variance.sqrt();
+}
+
 fn main() {
+    env_logger::init();
+
     let a = create_random_vec(SIZE);
     let b = create_random_vec(SIZE);
 
-    env_logger::init();
+    println!("🔥 Warming up GPU...");
+    pollster::block_on(dot_product_gpu(&a, &b)).unwrap();
 
-    let gpu_result = pollster::block_on(dot_product_gpu(&a, &b)).unwrap();
+    let mut cpu_times = Vec::new();
+    let mut gpu_times = Vec::new();
 
-    let cpu_result: u32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+    let mut cpu_result = 0;
+    let mut gpu_result = 0;
 
-    println!("CPU result: {}", cpu_result);
-    println!("GPU result: {}", gpu_result);
+    println!("🚀 Running {} iterations...\n", ITERATIONS);
 
-    if cpu_result == gpu_result {
-        println!("✅ GPU dot product is correct!");
+    for _ in 0..ITERATIONS {
+        let (res, time) = measure_cpu(&a, &b);
+        cpu_result = res;
+        cpu_times.push(time);
+
+        let (res, time) =
+            pollster::block_on(measure_gpu(&a, &b));
+        gpu_result = res;
+        gpu_times.push(time);
+    }
+
+    // Vérification résultat
+    if cpu_result != gpu_result {
+        println!("❌ Results mismatch!");
+        return;
+    }
+
+    let cpu_mean = mean(&cpu_times);
+    let gpu_mean = mean(&gpu_times);
+
+    let cpu_std = std_dev(&cpu_times, cpu_mean);
+    let gpu_std = std_dev(&gpu_times, gpu_mean);
+
+    println!("==============================");
+    println!("Results over {} iterations", ITERATIONS);
+    println!("==============================\n");
+
+    println!(
+        "CPU  -> avg: {:.6} s | std_dev: {:.6}",
+        cpu_mean, cpu_std
+    );
+
+    println!(
+        "GPU  -> avg: {:.6} s | std_dev: {:.6}",
+        gpu_mean, gpu_std
+    );
+
+    let speedup = cpu_mean / gpu_mean;
+
+    println!("\n⚡ Speedup: {:.2}x", speedup);
+
+    if speedup > 1.0 {
+        println!("🏆 GPU is faster");
     } else {
-        println!("❌ Mismatch detected!");
+        println!("🏆 CPU is faster");
     }
 }
