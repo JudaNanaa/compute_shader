@@ -13,7 +13,7 @@ fn create_random_vec(size: u32) -> Vec<u32> {
         v.push(rng.random_range(0..3));
     }
 
-    return v;
+    v
 }
 
 #[repr(C)]
@@ -69,10 +69,10 @@ fn create_reduction_passes(
         current_len = dispatch_count;
     }
 
-    return (passes, input_buffer);
+    (passes, input_buffer)
 }
 
-async fn dot_product_gpu(a: &Vec<u32>, b: &Vec<u32>) -> anyhow::Result<u32> {
+async fn dot_product_gpu(a: &[u32], b: &[u32]) -> anyhow::Result<u32> {
     assert_eq!(a.len(), b.len());
 
     // ========================
@@ -215,7 +215,7 @@ async fn dot_product_gpu(a: &Vec<u32>, b: &Vec<u32>) -> anyhow::Result<u32> {
 
     queue.submit(Some(encoder.finish()));
 
-	let result;
+    let result;
     {
         let (tx, rx) = bounded(1);
 
@@ -232,49 +232,41 @@ async fn dot_product_gpu(a: &Vec<u32>, b: &Vec<u32>) -> anyhow::Result<u32> {
 
     readback.unmap();
 
-    return Ok(result);
+    Ok(result)
 }
 
 use std::time::Instant;
 
 const ITERATIONS: usize = 200;
 
-fn measure_cpu(a: &Vec<u32>, b: &Vec<u32>) -> (u32, f64) {
+fn measure_cpu(a: &[u32], b: &[u32]) -> (u32, f64) {
     let start = Instant::now();
 
-    let result: u32 = a
-        .iter()
-        .zip(b.iter())
-        .map(|(x, y)| x * y)
-        .sum();
+    let result: u32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
 
     let duration = start.elapsed().as_secs_f64();
 
-    return (result, duration);
+    (result, duration)
 }
 
-async fn measure_gpu(a: &Vec<u32>, b: &Vec<u32>) -> (u32, f64) {
+async fn measure_gpu(a: &[u32], b: &[u32]) -> (u32, f64) {
     let start = Instant::now();
 
     let result = dot_product_gpu(a, b).await.unwrap();
 
     let duration = start.elapsed().as_secs_f64();
 
-    return (result, duration);
+    (result, duration)
 }
 
-fn mean(values: &Vec<f64>) -> f64 {
-    return values.iter().sum::<f64>() / values.len() as f64;
+fn mean(values: &[f64]) -> f64 {
+    values.iter().sum::<f64>() / values.len() as f64
 }
 
-fn std_dev(values: &Vec<f64>, mean: f64) -> f64 {
-    let variance = values
-        .iter()
-        .map(|v| (v - mean).powi(2))
-        .sum::<f64>()
-        / values.len() as f64;
+fn std_dev(values: &[f64], mean: f64) -> f64 {
+    let variance = values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / values.len() as f64;
 
-    return variance.sqrt();
+    variance.sqrt()
 }
 
 fn main() {
@@ -282,7 +274,7 @@ fn main() {
 
     let a = create_random_vec(SIZE);
     let b = create_random_vec(SIZE);
-
+	
     println!("🔥 Warming up GPU...");
     pollster::block_on(dot_product_gpu(&a, &b)).unwrap();
 
@@ -299,8 +291,7 @@ fn main() {
         cpu_result = res;
         cpu_times.push(time);
 
-        let (res, time) =
-            pollster::block_on(measure_gpu(&a, &b));
+        let (res, time) = pollster::block_on(measure_gpu(&a, &b));
         gpu_result = res;
         gpu_times.push(time);
     }
@@ -321,15 +312,9 @@ fn main() {
     println!("Results over {} iterations", ITERATIONS);
     println!("==============================\n");
 
-    println!(
-        "CPU  -> avg: {:.6} s | std_dev: {:.6}",
-        cpu_mean, cpu_std
-    );
+    println!("CPU  -> avg: {:.6} s | std_dev: {:.6}", cpu_mean, cpu_std);
 
-    println!(
-        "GPU  -> avg: {:.6} s | std_dev: {:.6}",
-        gpu_mean, gpu_std
-    );
+    println!("GPU  -> avg: {:.6} s | std_dev: {:.6}", gpu_mean, gpu_std);
 
     let speedup = cpu_mean / gpu_mean;
 
