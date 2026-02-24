@@ -274,7 +274,7 @@ fn main() {
 
     let a = create_random_vec(SIZE);
     let b = create_random_vec(SIZE);
-	
+
     println!("🔥 Warming up GPU...");
     pollster::block_on(dot_product_gpu(&a, &b)).unwrap();
 

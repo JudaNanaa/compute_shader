@@ -2,6 +2,9 @@ use flume::bounded;
 use rand::RngExt;
 use wgpu::util::DeviceExt;
 
+mod blelloch;
+mod init_wgpu;
+
 const WORKGROUP_SIZE: u32 = 64;
 const SIZE: u32 = 100000;
 
@@ -22,18 +25,12 @@ struct Params {
     len: u32,
 }
 
-async fn dot_product_gpu(a: &[u32]) -> anyhow::Result<Vec<u32>> {
+async fn naive_prefix_sum(a: &[u32]) -> anyhow::Result<Vec<u32>> {
     // ========================
     // GPU INIT
     // ========================
 
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::PRIMARY,
-        ..Default::default()
-    });
-
-    let adapter = instance.request_adapter(&Default::default()).await.unwrap();
-    let (device, queue) = adapter.request_device(&Default::default()).await.unwrap();
+    let (device, queue) = init_wgpu::init_wgpu().await;
 
     // ========================
     // BUFFERS
@@ -55,8 +52,6 @@ async fn dot_product_gpu(a: &[u32]) -> anyhow::Result<Vec<u32>> {
         usage: wgpu::BufferUsages::STORAGE,
     });
 
-    println!("size a_buffer == {}", a_buffer.size());
-
     // ========================
     // PASS 1
     // ========================
@@ -69,9 +64,6 @@ async fn dot_product_gpu(a: &[u32]) -> anyhow::Result<Vec<u32>> {
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
         mapped_at_creation: false,
     });
-
-    println!("result Buffer size == {}", result_buffer.size());
-    println!("a.len == {}", a.len() as u64 * 4);
 
     let shader1 = device.create_shader_module(wgpu::include_wgsl!("../shaders/pre_sum.wgsl"));
 
@@ -152,17 +144,81 @@ async fn dot_product_gpu(a: &[u32]) -> anyhow::Result<Vec<u32>> {
     Ok(result)
 }
 
+fn cpu_prefix_sum(input: &[u32]) -> Vec<u32> {
+    let mut output = Vec::with_capacity(input.len());
+
+    let mut sum = 0;
+    for &value in input {
+        sum += value;
+        output.push(sum);
+    }
+
+    output
+}
+
 use std::time::Instant;
 
-const ITERATIONS: usize = 5;
+const BENCH_ITERS: usize = 5;
 
 fn main() {
     env_logger::init();
 
     let a = create_random_vec(SIZE);
 
+    println!("a == {:?}", a);
     println!("🔥 Warming up GPU...");
-    let result = pollster::block_on(dot_product_gpu(&a)).unwrap();
-    println!("vec au debut = {:?}", a);
-    println!("vec a la fin = {:?}", result);
+    pollster::block_on(blelloch::blelloch_prefix_sum(&a)).unwrap();
+    // pollster::block_on(naive_prefix_sum(&a)).unwrap();
+
+    println!("🚀 Benchmarking ({} iterations)...", BENCH_ITERS);
+
+    // =========================
+    // BLELLOCH
+    // =========================
+    let start = Instant::now();
+
+    let mut blelloch_result = Vec::new();
+    for _ in 0..BENCH_ITERS {
+        blelloch_result = pollster::block_on(blelloch::blelloch_prefix_sum(&a)).unwrap();
+    }
+
+    let blelloch_time = start.elapsed().as_secs_f64() / BENCH_ITERS as f64;
+
+    // =========================
+    // CPU optimal
+    // =========================
+    let start = Instant::now();
+
+    let mut cpu_result = Vec::new();
+    for _ in 0..BENCH_ITERS {
+        cpu_result = cpu_prefix_sum(&a);
+    }
+
+    let cpu_time = start.elapsed().as_secs_f64() / BENCH_ITERS as f64;
+
+    // =========================
+    // NAIVE
+    // =========================
+    // let start = Instant::now();
+    //
+    // let mut naive_result = Vec::new();
+    // for _ in 0..BENCH_ITERS {
+    //     naive_result = pollster::block_on(naive_prefix_sum(&a)).unwrap();
+    // }
+    //
+    // let naive_time = start.elapsed().as_secs_f64() / BENCH_ITERS as f64;
+
+    // =========================
+    // VALIDATION
+    // =========================
+    // assert_eq!(naive_result, cpu_result);
+    assert_eq!(blelloch_result, cpu_result);
+
+    println!();
+    println!("========== RESULTS ==========");
+    println!("Blelloch avg : {:.6} sec", blelloch_time);
+    // println!("Naive    avg : {:.6} sec", naive_time);
+    println!("CPU    avg : {:.6} sec", cpu_time);
+    // println!("Speedup      : {:.2}x", naive_time / blelloch_time);
+    println!("Speedup (CPU/GPU): {:.2}x", cpu_time / blelloch_time);
 }

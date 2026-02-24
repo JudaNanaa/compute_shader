@@ -1,14 +1,14 @@
+use flume::bounded;
 use rand::RngExt;
 use wgpu::util::DeviceExt;
-use flume::bounded;
 
 fn create_random_vec(size: u32) -> Vec<u32> {
     let mut dest = Vec::with_capacity(size as usize);
     let mut rng = rand::rng();
 
     for _ in 0..size {
-		let rng_value = rng.random_range(0..size);
-		dest.push(rng_value);
+        let rng_value = rng.random_range(0..size);
+        dest.push(rng_value);
     }
     return dest;
 }
@@ -85,37 +85,36 @@ async fn run(input_data: Vec<u32>) -> anyhow::Result<()> {
 
     queue.submit([encoder.finish()]);
 
-		
-		{
-			// The mapping process is async, so we'll need to create a channel to get
-			// the success flag for our mapping
-			let (tx, rx) = bounded(1);
+    {
+        // The mapping process is async, so we'll need to create a channel to get
+        // the success flag for our mapping
+        let (tx, rx) = bounded(1);
 
-			// We send the success or failure of our mapping via a callback
-			temp_buffer.map_async(wgpu::MapMode::Read, .., move |result| {
-				tx.send(result).unwrap()
-			});
+        // We send the success or failure of our mapping via a callback
+        temp_buffer.map_async(wgpu::MapMode::Read, .., move |result| {
+            tx.send(result).unwrap()
+        });
 
-			// The callback we submitted to map async will only get called after the
-			// device is polled or the queue submitted
-			device.poll(wgpu::PollType::wait_indefinitely())?;
+        // The callback we submitted to map async will only get called after the
+        // device is polled or the queue submitted
+        device.poll(wgpu::PollType::wait_indefinitely())?;
 
-			// We check if the mapping was successful here
-			rx.recv_async().await??;
+        // We check if the mapping was successful here
+        rx.recv_async().await??;
 
-			// We then get the bytes that were stored in the buffer
-			let output_data = temp_buffer.get_mapped_range(..);
+        // We then get the bytes that were stored in the buffer
+        let output_data = temp_buffer.get_mapped_range(..);
 
-			// Now we have the data on the CPU we can do what ever we want to with it
-			assert_eq!(&input_data, bytemuck::cast_slice(&output_data));
-		}
+        // Now we have the data on the CPU we can do what ever we want to with it
+        assert_eq!(&input_data, bytemuck::cast_slice(&output_data));
+    }
 
-		// We need to unmap the buffer to be able to use it again
-		temp_buffer.unmap();
+    // We need to unmap the buffer to be able to use it again
+    temp_buffer.unmap();
 
-		println!("Success!");
+    println!("Success!");
 
-	return Ok(());
+    return Ok(());
 }
 
 fn main() {
