@@ -1,4 +1,4 @@
-use wgpu::{Buffer, util::DeviceExt};
+use wgpu::util::DeviceExt;
 
 use crate::init_wgpu;
 
@@ -18,31 +18,16 @@ fn pad_to_power_of_two(input: &[u32]) -> Vec<u32> {
     padded
 }
 
-fn create_buffer_init<'a>(
+fn create_buffer_init(
     device: &wgpu::Device,
     label: Option<&str>,
-    contents: &'a [u8],
+    contents: &[u8],
     usage: wgpu::BufferUsages,
 ) -> wgpu::Buffer {
     device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label,
         contents,
         usage,
-    })
-}
-
-fn create_buffer<'a>(
-    device: &wgpu::Device,
-    label: Option<&str>,
-    size: u64,
-    usage: wgpu::BufferUsages,
-    mapped_at_creation: bool,
-) -> wgpu::Buffer {
-    device.create_buffer(&wgpu::BufferDescriptor {
-        label,
-        size,
-        usage,
-        mapped_at_creation,
     })
 }
 
@@ -229,6 +214,7 @@ fn down_sweep_pipeline(
 
     (pipeline, passes, buffer)
 }
+
 fn addition_pipeline(
     device: &wgpu::Device,
     buffer: wgpu::Buffer,
@@ -260,7 +246,7 @@ fn addition_pipeline(
     );
 
     let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("clear BindGroup"),
+        label: Some("addition BindGroup"),
         layout: &pipeline.get_bind_group_layout(0),
         entries: &[
             wgpu::BindGroupEntry {
@@ -290,44 +276,48 @@ pub async fn blelloch_prefix_sum(tab: &[u32]) -> anyhow::Result<Vec<u32>> {
 
     let padded = pad_to_power_of_two(tab);
 
-    let (up_sweep_piepline, up_sweep_pipeline_parms, output_buffer) =
+    let (up_sweep_pipeline, up_sweep_pipeline_parms, output_buffer) =
         up_sweep_pipeline(&device, &padded);
 
-    let (clear_piepline, clear_pipeline_parms, output_buffer) =
+    let (clear_pipeline, clear_pipeline_parms, output_buffer) =
         clear_pipeline(&device, output_buffer, &padded);
 
-    let (down_sweep_piepline, down_sweep_pipeline_parms, output_buffer) =
+    let (down_sweep_pipeline, down_sweep_pipeline_parms, output_buffer) =
         down_sweep_pipeline(&device, output_buffer, &padded);
 
-    let (addition_piepline, addition_pipeline_parms, output_buffer) =
+    let (addition_pipeline, addition_pipeline_parms, output_buffer) =
         addition_pipeline(&device, output_buffer, &padded);
 
     let mut encoder = device.create_command_encoder(&Default::default());
 
-    for elem in up_sweep_pipeline_parms {
+    {
         let mut pass = encoder.begin_compute_pass(&Default::default());
-        pass.set_pipeline(&up_sweep_piepline);
-        pass.set_bind_group(0, &elem.bind_group, &[]);
-        pass.dispatch_workgroups(elem.dispatch_count, 1, 1);
+        pass.set_pipeline(&up_sweep_pipeline);
+        for elem in &up_sweep_pipeline_parms {
+            pass.set_bind_group(0, &elem.bind_group, &[]);
+            pass.dispatch_workgroups(elem.dispatch_count, 1, 1);
+        }
     }
 
     {
         let mut pass = encoder.begin_compute_pass(&Default::default());
-        pass.set_pipeline(&clear_piepline);
+        pass.set_pipeline(&clear_pipeline);
         pass.set_bind_group(0, &clear_pipeline_parms.bind_group, &[]);
         pass.dispatch_workgroups(clear_pipeline_parms.dispatch_count, 1, 1);
     }
 
-    for elem in down_sweep_pipeline_parms {
+    {
         let mut pass = encoder.begin_compute_pass(&Default::default());
-        pass.set_pipeline(&down_sweep_piepline);
-        pass.set_bind_group(0, &elem.bind_group, &[]);
-        pass.dispatch_workgroups(elem.dispatch_count, 1, 1);
+        pass.set_pipeline(&down_sweep_pipeline);
+        for elem in &down_sweep_pipeline_parms {
+            pass.set_bind_group(0, &elem.bind_group, &[]);
+            pass.dispatch_workgroups(elem.dispatch_count, 1, 1);
+        }
     }
 
     {
         let mut pass = encoder.begin_compute_pass(&Default::default());
-        pass.set_pipeline(&addition_piepline);
+        pass.set_pipeline(&addition_pipeline);
         pass.set_bind_group(0, &addition_pipeline_parms.bind_group, &[]);
         pass.dispatch_workgroups(addition_pipeline_parms.dispatch_count, 1, 1);
     }

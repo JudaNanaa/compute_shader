@@ -6,7 +6,7 @@ mod blelloch;
 mod init_wgpu;
 
 const WORKGROUP_SIZE: u32 = 64;
-const SIZE: u32 = 100000;
+const SIZE: u32 = 8;
 
 fn create_random_vec(size: u32) -> Vec<u32> {
     let mut rng = rand::rng();
@@ -168,7 +168,7 @@ fn main() {
     println!("a == {:?}", a);
     println!("🔥 Warming up GPU...");
     pollster::block_on(blelloch::blelloch_prefix_sum(&a)).unwrap();
-    // pollster::block_on(naive_prefix_sum(&a)).unwrap();
+    pollster::block_on(naive_prefix_sum(&a)).unwrap();
 
     println!("🚀 Benchmarking ({} iterations)...", BENCH_ITERS);
 
@@ -199,26 +199,27 @@ fn main() {
     // =========================
     // NAIVE
     // =========================
-    // let start = Instant::now();
-    //
-    // let mut naive_result = Vec::new();
-    // for _ in 0..BENCH_ITERS {
-    //     naive_result = pollster::block_on(naive_prefix_sum(&a)).unwrap();
-    // }
-    //
-    // let naive_time = start.elapsed().as_secs_f64() / BENCH_ITERS as f64;
+    let start = Instant::now();
+
+    let mut naive_result = Vec::new();
+    for _ in 0..BENCH_ITERS {
+        naive_result = pollster::block_on(naive_prefix_sum(&a)).unwrap();
+    }
+
+    let naive_time = start.elapsed().as_secs_f64() / BENCH_ITERS as f64;
 
     // =========================
     // VALIDATION
     // =========================
-    // assert_eq!(naive_result, cpu_result);
+    assert_eq!(naive_result, cpu_result);
     assert_eq!(blelloch_result, cpu_result);
 
     println!();
     println!("========== RESULTS ==========");
     println!("Blelloch avg : {:.6} sec", blelloch_time);
-    // println!("Naive    avg : {:.6} sec", naive_time);
+    println!("Naive    avg : {:.6} sec", naive_time);
     println!("CPU    avg : {:.6} sec", cpu_time);
-    // println!("Speedup      : {:.2}x", naive_time / blelloch_time);
+    println!("Speedup      : {:.2}x", naive_time / blelloch_time);
     println!("Speedup (CPU/GPU): {:.2}x", cpu_time / blelloch_time);
 }
+
