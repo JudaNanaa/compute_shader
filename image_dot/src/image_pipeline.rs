@@ -1,29 +1,18 @@
 use std::sync::Arc;
 
-use anyhow::{Ok, Result};
+use anyhow::Result;
 use image::EncodableLayout;
 use wgpu::util::DeviceExt;
 
 use crate::{
     gpu_context::{self, GpuContext},
     image_exportrer::ImageExporter,
-    texture, texture_builder::TextureBuilder,
+    point::Point,
+    texture,
+    texture_builder::TextureBuilder,
 };
 
 const WORKGROUP_SIZE: u32 = 8;
-
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct Point {
-    x: f32,
-    y: f32,
-}
-
-impl Point {
-    pub fn new(x: f32, y: f32) -> Self {
-        Self { x, y }
-    }
-}
 
 struct BoundPipeline {
     bind_group: wgpu::BindGroup,
@@ -70,7 +59,7 @@ impl BoundPipeline {
 }
 
 pub struct ImagePipeline {
-    ctx: Arc<gpu_context::GpuContext>,
+    pub ctx: Arc<gpu_context::GpuContext>,
     input_texture: texture::Texture,
     output_texture: texture::Texture,
     overlay_texture: texture::Texture,
@@ -80,15 +69,33 @@ pub struct ImagePipeline {
     blend_bound_pipeline: BoundPipeline,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct Params {
+    color: [f32; 4],
+    size: f32,
+    shape: u32,
+    _padding: [u32; 2],
+}
+
+impl Params {
+    pub fn new(color: [f32; 4], size: f32, shape: u32) -> Self {
+        Self {
+            color,
+            size,
+            shape,
+            _padding: [0, 0],
+        }
+    }
+}
+
 impl ImagePipeline {
-    pub async fn new(
-        ctx: Arc<GpuContext>,
-        file_input: &str,
-        file_output: &str,
-        points: &[Point],
-    ) -> Result<Self> {
+    pub async fn new(ctx: Arc<GpuContext>) -> Result<Self> {
         let device = &ctx.device;
         let queue = &ctx.queue;
+
+        let file_input = ctx.debug_config.input_file.clone();
+        let file_output = ctx.debug_config.output_file.clone();
 
         let input_texture = texture::Texture::from_bytes(
             &device,
@@ -109,14 +116,32 @@ impl ImagePipeline {
             "overlay texture",
         );
 
+        let points = Point::random_points(1000, 1000.0, 1000.0);
+
+        let params = Params::new(
+            ctx.debug_config.get_color(),
+            ctx.debug_config.get_size(),
+            ctx.debug_config.get_current_shape_u32(),
+        );
+
+        let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("params buffer"),
+            contents: bytemuck::bytes_of(&params),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+
         let points_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Points buffer"),
             contents: bytemuck::cast_slice(&points),
             usage: wgpu::BufferUsages::STORAGE,
         });
 
-        let overlay_bound_pipeline =
-            Self::create_overlay_pipeline(&device, &overlay_texture, &points_buffer);
+        let overlay_bound_pipeline = Self::create_overlay_pipeline(
+            &device,
+            &params_buffer,
+            &overlay_texture,
+            &points_buffer,
+        );
         let blend_bound_pipeline =
             Self::create_blend_pipeline(&device, &input_texture, &overlay_texture, &output_texture);
 
@@ -140,6 +165,7 @@ impl ImagePipeline {
 
         {
             let mut pass = encoder.begin_compute_pass(&Default::default());
+            // pass.set_bind_group(0, &self.overlay_bound_pipeline.bind_group, &[]);
             self.overlay_bound_pipeline
                 .dispatch(&mut pass, image_width, image_height);
         }
@@ -203,28 +229,9 @@ impl ImagePipeline {
         Ok(())
     }
 
-    fn create_texture(
-        device: &wgpu::Device,
-        size: wgpu::Extent3d,
-        usage: wgpu::TextureUsages,
-        label: &str,
-    ) -> texture::Texture {
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some(label),
-            size,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&Default::default());
-        texture::Texture { texture, view }
-    }
-
     fn create_overlay_pipeline(
         device: &wgpu::Device,
+        params_buffer: &wgpu::Buffer,
         overlay: &texture::Texture,
         points_buffer: &wgpu::Buffer,
     ) -> BoundPipeline {
@@ -237,6 +244,16 @@ impl ImagePipeline {
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::StorageTexture {
                         access: wgpu::StorageTextureAccess::WriteOnly,
                         format: wgpu::TextureFormat::Rgba8Unorm,
@@ -245,7 +262,7 @@ impl ImagePipeline {
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry {
-                    binding: 1,
+                    binding: 2,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -264,10 +281,14 @@ impl ImagePipeline {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&overlay.view),
+                    resource: params_buffer.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&overlay.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
                     resource: points_buffer.as_entire_binding(),
                 },
             ],

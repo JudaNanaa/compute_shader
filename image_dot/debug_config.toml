@@ -1,0 +1,21 @@
+input_file = "./assets/goku.jpg"
+
+output_file = "./assets/goku-test.jpg"
+
+shape = "triangle"
+
+[triangle]
+color = "blue"
+size = 10
+
+[circle]
+color = "green"
+size = 8
+
+[line]
+color = "blue"
+size = 10
+
+[square]
+color = "blue"
+size = 10
