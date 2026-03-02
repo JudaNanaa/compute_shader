@@ -14,6 +14,8 @@ use crate::{
 
 const WORKGROUP_SIZE: u32 = 8;
 
+const NB_POINT: usize = 100;
+
 struct BoundPipeline {
     bind_group: wgpu::BindGroup,
     pipeline: wgpu::ComputePipeline,
@@ -116,7 +118,7 @@ impl ImagePipeline {
             "overlay texture",
         );
 
-        let points = Point::random_points(1000, 1000.0, 1000.0);
+        let points = Point::random_points(NB_POINT, 1000.0, 1000.0);
 
         let params = Params::new(
             ctx.debug_config.get_color(),

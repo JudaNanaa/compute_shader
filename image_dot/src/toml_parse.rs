@@ -90,7 +90,8 @@ pub enum ShapeType {
     Circle = 1,
     Triangle = 2,
     Square = 3,
-    Line = 4,
+    Cross = 4,
+    Line = 5,
 }
 
 #[derive(Deserialize)]
@@ -99,6 +100,7 @@ enum ShapeTypeRaw {
     Triangle,
     Circle,
     Square,
+    Cross,
     Line,
 }
 
@@ -106,6 +108,7 @@ impl From<ShapeTypeRaw> for ShapeType {
     fn from(raw: ShapeTypeRaw) -> Self {
         match raw {
             ShapeTypeRaw::Triangle => ShapeType::Triangle,
+            ShapeTypeRaw::Cross => ShapeType::Cross,
             ShapeTypeRaw::Square => ShapeType::Square,
             ShapeTypeRaw::Circle => ShapeType::Circle,
             ShapeTypeRaw::Line => ShapeType::Line,
@@ -128,6 +131,7 @@ pub struct DebugGpuContext {
     pub circle: ShapeConfig,
     pub line: ShapeConfig,
     square: ShapeConfig,
+    cross: ShapeConfig,
 }
 
 impl DebugGpuContext {
@@ -149,6 +153,7 @@ impl DebugGpuContext {
 
     pub fn get_shape_infos(&self) -> &ShapeConfig {
         match self.get_current_shape() {
+            ShapeType::Cross => &self.cross,
             ShapeType::Square => &self.square,
             ShapeType::Circle => &self.circle,
             ShapeType::Triangle => &self.triangle,
@@ -167,6 +172,7 @@ struct DebugGpuContextHelper {
     circle: ShapeConfig,
     line: ShapeConfig,
     square: ShapeConfig,
+    cross: ShapeConfig,
 }
 
 impl<'de> Deserialize<'de> for DebugGpuContext {
@@ -185,6 +191,7 @@ impl<'de> Deserialize<'de> for DebugGpuContext {
             circle: helper.circle,
             line: helper.line,
             square: helper.square,
+			cross: helper.cross
         })
     }
 }

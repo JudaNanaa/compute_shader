@@ -2,7 +2,7 @@ input_file = "./assets/goku.jpg"
 
 output_file = "./assets/goku-test.jpg"
 
-shape = "triangle"
+shape = "cross"
 
 [triangle]
 color = "blue"
@@ -17,5 +17,9 @@ color = "blue"
 size = 10
 
 [square]
+color = "blue"
+size = 10
+
+[cross]
 color = "blue"
 size = 10

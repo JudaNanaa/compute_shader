@@ -1,6 +1,7 @@
 const SHAPE_CIRCLE: u32 = 1u;
 const SHAPE_TRIANGLE: u32 = 2u;
 const SHAPE_SQUARE: u32 = 3u;
+const SHAPE_CROSS: u32 = 4u;
 
 struct Params {
 	color: vec4<f32>,
@@ -62,55 +63,18 @@ fn point_in_square(pos: vec2<f32>, center: vec2<f32>, size: f32) -> bool {
             pos.y >= min.y && pos.y <= max.y);
 }
 
+fn point_in_cross(pos: vec2<f32>, center: vec2<f32>, size: f32) -> bool {
 
-fn point_on_line(
-    pix: vec2<f32>,
-    a: vec2<f32>,
-    b: vec2<f32>,
-    thickness: f32
-) -> bool {
+    let dx = abs(pos.x - center.x);
+    let dy = abs(pos.y - center.y);
 
-    let ab = b - a;
-    let ap = pix - a;
+    let thickness = 2.0;
+    let arm = size;
 
-    let ab_len2 = dot(ab, ab);
+    let horizontal = (dx < arm) && (dy < thickness);
+    let vertical   = (dy < arm) && (dx < thickness);
 
-    if (ab_len2 < 0.0001) {
-        return false;
-    }
-
-    let t = dot(ap, ab) / ab_len2;
-    let t_clamped = clamp(t, 0.0, 1.0);
-
-    let projection = a + t_clamped * ab;
-
-    let dist = distance(pix, projection);
-
-    return dist < thickness;
-}
-
-fn find_nearest_neighbor(index: u32) -> u32 {
-
-    var min_dist = 1e9;
-    var nearest = 0u;
-
-    let current = points[index].position;
-
-    for (var j = 0u; j < arrayLength(&points); j++) {
-
-        if (j == index) {
-            continue;
-        }
-
-        let d = distance(current, points[j].position);
-
-        if (d < min_dist) {
-            min_dist = d;
-            nearest = j;
-        }
-    }
-
-    return nearest;
+    return horizontal || vertical;
 }
 
 @compute @workgroup_size(8, 8)
@@ -141,6 +105,9 @@ fn cs_main(@builtin(global_invocation_id) id : vec3<u32>) {
 		}
 		else if (params.shape == SHAPE_SQUARE) {
 			hit = point_in_square(pixel_pos, p, params.size);
+		}
+		else if (params.shape == SHAPE_CROSS) {
+    		hit = point_in_cross(pixel_pos, p, params.size);
 		}
 		if (hit) {
  		   draw = true;
